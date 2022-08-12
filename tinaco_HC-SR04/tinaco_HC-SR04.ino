@@ -73,17 +73,19 @@ float duration, distance;
 #define DISTANCE_THRESHOLD 100 // distance in mm. When measured a distance higher than this threshold it will update the value in the server
 int distanceRange;
 
-#define HARD_MIN 2500.00 // distance in mm. to set 0%
-#define HARD_MAX 500.00  // distance in mm. to set 100%
-#define SOFT_MIN 2000.00 // distance in mm. to set the pump ON
-#define SOFT_MAX 700.00  // distance in mm. to set the pump OFF
-#define PUMP_PIN 14      // Pin to trigger pump relay
+float HARD_MIN = 2000; // distance in mm. to set 0%
+float HARD_MAX = 500;  // distance in mm. to set 100%
+float SOFT_MIN = 1750; // distance in mm. to set the pump ON
+float SOFT_MAX = 750;  // distance in mm. to set the pump OFF
+#define PUMP_PIN 14    // Pin to trigger pump relay
 
 /***** MEASURE TIMEOUT *****/
 unsigned long me_timestamp = millis();
 /*unsigned int  me_times = 0;*/
 unsigned int  me_timeout = 1000; // 1 second. Delay between each measurement in loop
 unsigned int  me_track = me_timeout; // me_track = me_timeout; TO: execute function and then start counting
+
+ESP8266WebServer serverConfig(5050);
 
 #define PIN_CTRL 15 // Pin que hará una medición manualmente, si se presiona mas de 2 degundos TOGGLE el modo AP y STA+AP, si se presiona 10 segundos se borra toda la memoria EEPROM y se resetea el dispositivo.
 
@@ -318,6 +320,34 @@ void doMeasurement(bool log = true) {
 }
 
 /////////////////////////////////////////////////
+/////// DO DISTANCE MEASUREMENT AVERAGED ///////
+
+float doAvgMeasurement(int lectures, int msDelay) {
+
+  float avgDist = 0;
+
+  for (int i = 0; i < lectures; i++) {
+    doMeasurement();
+    avgDist = avgDist + distance;
+    delay(msDelay);
+  }
+
+  avgDist = avgDist / lectures;
+
+  // Print result to serial monitor
+  Serial.print("average of ");
+  Serial.print(lectures);
+  Serial.print("lectures in ");
+  Serial.print(msDelay * lectures);
+  Serial.print("ms: ");
+  Serial.print(avgDist);
+  Serial.println("mm");
+
+  return avgDist;
+
+}
+
+/////////////////////////////////////////////////
 ////////// DISTANCE TO % OF WATER TANK //////////
 
 float distToPercent(bool log = true) {
@@ -347,6 +377,7 @@ void doInLoop() {
   wifiConfigLoop();
 
   serverOTA.handleClient();
+  serverConfig.handleClient();
 
   if ( digitalRead(PIN_CTRL) == 1 ) { // IF PIN_CTRL IS PRESSED
     
@@ -551,6 +582,39 @@ void setup() {
   setLedModeInverted(true);
 
 
+
+
+
+  serverConfig.on("/", HTTP_GET, []() {
+    serverConfig.sendHeader("Connection", "close");
+    serverConfig.send(200, "text/html", "<!DOCTYPE html><html><head><style type=\"text\/css\">* {font-family: \"Trebuchet MS\";}body {margin: 0;padding: 0;background-color: #F1F2F4;}#main {display: flex;flex-direction: column;align-items: center;justify-content: center;}#main * {margin-top: 2em;}img {width: 80%;max-width: 500px;}a {background-color: white;border: 1px solid lightblue;color: lightblue;border-radius: 5px;padding-top: 0.5em;padding-bottom: 0.5em;padding-left: 1em;padding-right: 1em;cursor: pointer;transition: all 0.2s;text-decoration: none;font-weight: bold;}a {box-shadow: 0px 5px 10px 0 rgb(0 0 0 \/ 10%);}<\/style><meta charset=\"utf-8\"><title>Config Sketch<\/title><\/head><body><div id=\"main\"><img src=\"data:image\/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMTYuMzQgMjA4LjM4Ij48ZGVmcz48c3R5bGU+LmNscy0xLC5jbHMtM3tmaWxsOiM2NjY7fS5jbHMtMntmaWxsOm5vbmU7c3Ryb2tlOiM2NjY7c3Ryb2tlLW1pdGVybGltaXQ6MTA7fS5jbHMtM3tmb250LXNpemU6MTJweDtmb250LWZhbWlseTpJQk1QbGV4TW9uby1Cb2xkLCBJQk0gUGxleCBNb25vO2ZvbnQtd2VpZ2h0OjcwMDt9PC9zdHlsZT48L2RlZnM+PGcgaWQ9IkxheWVyXzIiIGRhdGEtbmFtZT0iTGF5ZXIgMiI+PGcgaWQ9IkxheWVyXzEtMiIgZGF0YS1uYW1lPSJMYXllciAxIj48cGF0aCBjbGFzcz0iY2xzLTEiIGQ9Ik0xNTUsNTEsMTEzLDIxVjBINDNWMjFMMSw1MUgwVjIwMEgxNTVWNTFaIi8+PGxpbmUgY2xhc3M9ImNscy0yIiB4MT0iMTIzIiB5MT0iMjEiIHgyPSIxOTEuMDkiIHkyPSIyMSIvPjx0ZXh0IGNsYXNzPSJjbHMtMyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjQ0LjM0IDI1LjE4KSI+MTAwJTwvdGV4dD48dGV4dCBjbGFzcz0iY2xzLTMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI0NC4zNCA1NS4xOCkiPlN0b3AgcHVtcDwvdGV4dD48dGV4dCBjbGFzcz0iY2xzLTMiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI0NC4zNCAxNzQuMTgpIj5TdGFydCBwdW1wPC90ZXh0Pjx0ZXh0IGNsYXNzPSJjbHMtMyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjQ0LjM0IDIwNC4xOCkiPjAlPC90ZXh0PjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTE5OC4xMSwyMy4wOXYtLjcyaDEuMTNWMTkuNTZoLS4wNmwtLjg1LDEuMTItLjU3LS40NSwxLTEuMzJoMS4zOHYzLjQ2SDIwMXYuNzJaIi8+PGNpcmNsZSBjbGFzcz0iY2xzLTIiIGN4PSIxOTkuMzkiIGN5PSIyMSIgcj0iNC4yNCIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTIwMC45NCw1My4xM2gtM3YtLjgybDEuMzItMS4xYy40Ni0uMzkuNjQtLjY1LjY0LTF2LS4wNmEuNTEuNTEsMCwwLDAtLjU3LS41My42OS42OSwwLDAsMC0uNjkuNTlsLS43OS0uM2ExLjUzLDEuNTMsMCwwLDEsMS41Ny0xLjA3LDEuMjcsMS4yNywwLDAsMSwxLjQ0LDEuMjZjMCwuNy0uNSwxLjE1LTEuMTMsMS42M2wtLjc5LjYxaDJaIi8+PGNpcmNsZSBjbGFzcz0iY2xzLTIiIGN4PSIxOTkuMzkiIGN5PSI1MSIgcj0iNC4yNCIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTE5OS4yOSwxNjkuNTZjLjQ2LDAsLjY3LS4yLjY3LS40NXYtLjA1YzAtLjMtLjIyLS40OS0uNTktLjQ5YTEsMSwwLDAsMC0uODYuNDlsLS41Ny0uNTJhMS42NywxLjY3LDAsMCwxLDEuNDctLjdjLjksMCwxLjQ5LjQzLDEuNDksMS4xYS45NC45NCwwLDAsMS0uODEuOTV2MGExLDEsMCwwLDEsLjg5LDFjMCwuNzUtLjY0LDEuMjMtMS42MywxLjIzYTEuNjksMS42OSwwLDAsMS0xLjU1LS44bC42Ni0uNTFhMSwxLDAsMCwwLC45LjU4Yy40MywwLC42OC0uMjEuNjgtLjU2djBjMC0uMzQtLjI5LS41Mi0uNzUtLjUyaC0uMzl2LS43NVoiLz48Y2lyY2xlIGNsYXNzPSJjbHMtMiIgY3g9IjE5OS4zOSIgY3k9IjE3MCIgcj0iNC4yNCIvPjxwYXRoIGNsYXNzPSJjbHMtMSIgZD0iTTE5OS42MywyMDIuMDl2LS44aC0xLjg4di0uNzdsMS42Ni0yLjYxaDEuMDh2Mi42OEgyMDF2LjdoLS41NHYuOFptLTEuMTYtMS41aDEuMTZ2LTEuNzVoMFoiLz48Y2lyY2xlIGNsYXNzPSJjbHMtMiIgY3g9IjE5OS4zOSIgY3k9IjIwMCIgcj0iNC4yNCIvPjxsaW5lIGNsYXNzPSJjbHMtMiIgeDE9IjIzMy43OCIgeTE9IjUxIiB4Mj0iMjA3LjY5IiB5Mj0iNTEiLz48bGluZSBjbGFzcz0iY2xzLTIiIHgxPSIyMzMuNzgiIHkxPSIyMSIgeDI9IjIwNy42OSIgeTI9IjIxIi8+PGxpbmUgY2xhc3M9ImNscy0yIiB4MT0iMjMzLjc4IiB5MT0iMTcwIiB4Mj0iMjA3LjY5IiB5Mj0iMTcwIi8+PGxpbmUgY2xhc3M9ImNscy0yIiB4MT0iMjMzLjc4IiB5MT0iMjAwIiB4Mj0iMjA3LjY5IiB5Mj0iMjAwIi8+PGxpbmUgY2xhc3M9ImNscy0yIiB4MT0iMTY1IiB5MT0iNTEiIHgyPSIxOTEuMDkiIHkyPSI1MSIvPjxsaW5lIGNsYXNzPSJjbHMtMiIgeDE9IjE2NSIgeTE9IjE3MCIgeDI9IjE5MS4wOSIgeTI9IjE3MCIvPjxsaW5lIGNsYXNzPSJjbHMtMiIgeDE9IjE2NSIgeTE9IjIwMCIgeDI9IjE5MS4wOSIgeTI9IjIwMCIvPjwvZz48L2c+PC9zdmc+\"><a href=\"\/set-hard_max\">1) Set current level as 100%<\/a><a href=\"\/set-soft_max\">2) Stop pump at the current level<\/a><a href=\"\/set-soft_min\">3) Start pump at the current level<\/a><a href=\"\/set-hard_min\">4) Set current level as 0%<\/a><\/div><\/body><\/html>");
+  });
+
+  serverConfig.on("/set-hard_max", HTTP_GET, []() {
+    HARD_MAX = doAvgMeasurement(10, 100);
+    serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
+    serverConfig.send ( 302, "text/plain", "");
+  });
+
+  serverConfig.on("/set-soft_max", HTTP_GET, []() {
+    SOFT_MAX = doAvgMeasurement(10, 100);
+    serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
+    serverConfig.send ( 302, "text/plain", "");
+  });
+
+  serverConfig.on("/set-soft_min", HTTP_GET, []() {
+    SOFT_MIN = doAvgMeasurement(10, 100);
+    serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
+    serverConfig.send ( 302, "text/plain", "");
+  });
+
+  serverConfig.on("/set-hard_min", HTTP_GET, []() {
+    HARD_MIN = doAvgMeasurement(10, 100);
+    serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
+    serverConfig.send ( 302, "text/plain", "");
+  });
+
+  serverConfig.begin();
 
 
 
