@@ -70,6 +70,15 @@ WiFiClient sub_WiFiclient;
 // Floats to calculate distance
 float duration, distance;
 
+#define DISTANCE_THRESHOLD 100 // distance in mm. When measured a distance higher than this threshold it will update the value in the server
+int distanceRange;
+
+/***** MEASURE TIMEOUT *****/
+unsigned long me_timestamp = millis();
+/*unsigned int  me_times = 0;*/
+unsigned int  me_timeout = 1000; // 1 second. Delay between each measurement in loop
+unsigned int  me_track = me_timeout; // me_track = me_timeout; TO: execute function and then start counting
+
 #define PIN_CTRL 15 // Pin que hará una medición manualmente, si se presiona mas de 2 degundos TOGGLE el modo AP y STA+AP, si se presiona 10 segundos se borra toda la memoria EEPROM y se resetea el dispositivo.
 
 byte PIN_CTRL_VALUE;
@@ -272,7 +281,7 @@ void updateControllerData() {
 /////////////////////////////////////////////////
 //////////// DO DISTANCE MEASUREMENT ////////////
 
-void doMeasurement() {
+void doMeasurement(bool log = true) {
   // Set the trigger pin LOW for 2uS
   digitalWrite(TRIGPIN, LOW);
   delayMicroseconds(2);
@@ -293,10 +302,13 @@ void doMeasurement() {
  
   distance = (duration / 2) * 0.343;
  
-  // Print result to serial monitor
-  Serial.print("distance: ");
-  Serial.print(distance);
-  Serial.println(" mm");
+  if (log) {
+    // Print result to serial monitor
+    Serial.print("distance: ");
+    Serial.print(distance);
+    Serial.println(" mm");
+  }
+
 }
 
 /////////////////////////////////////////////////
@@ -358,6 +370,38 @@ void doInLoop() {
         // TOGGLE SERVER STATUS
         ESP_AP_TOGGLE(true);
       }
+    }
+  }
+
+
+
+  if ( millis() != me_timestamp ) { // "!=" intead of ">" tries to void possible bug when millis goes back to 0
+    me_track++;
+    me_timestamp = millis();
+  }
+
+  if ( me_track > me_timeout ) {
+    // DO TIMEOUT!
+    /*me_times++;*/
+    me_track = 0;
+    doMeasurement(false); // RUN THIS FUNCTION!
+  }
+
+
+  bool dThreshChanged;
+  int dThreshCurrRange = (int)(distance / DISTANCE_THRESHOLD);
+
+  if( dThreshCurrRange != distanceRange ){
+    distanceRange = dThreshCurrRange;
+    dThreshChanged =  true;
+  } else {
+    dThreshChanged =  false;
+  }
+
+  if (dThreshChanged) {
+    Serial.println("Distance threshold changed");
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=distance_threshold_changed&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distance + "}"));
     }
   }
   
