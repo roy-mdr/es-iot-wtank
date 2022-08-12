@@ -73,6 +73,12 @@ float duration, distance;
 #define DISTANCE_THRESHOLD 100 // distance in mm. When measured a distance higher than this threshold it will update the value in the server
 int distanceRange;
 
+#define HARD_MIN 2500.00 // distance in mm. to set 0%
+#define HARD_MAX 500.00  // distance in mm. to set 100%
+#define SOFT_MIN 2000.00 // distance in mm. to set the pump ON
+#define SOFT_MAX 700.00  // distance in mm. to set the pump OFF
+#define PUMP_PIN 14      // Pin to trigger pump relay
+
 /***** MEASURE TIMEOUT *****/
 unsigned long me_timestamp = millis();
 /*unsigned int  me_times = 0;*/
@@ -312,6 +318,24 @@ void doMeasurement(bool log = true) {
 }
 
 /////////////////////////////////////////////////
+////////// DISTANCE TO % OF WATER TANK //////////
+
+float distToPercent(bool log = true) {
+
+  float perc = map(distance, HARD_MIN, HARD_MAX, 0, 100);
+
+  if (log) {
+    // Print result to serial monitor
+    Serial.print("distance in perc: ");
+    Serial.print(perc);
+    Serial.println("%");
+  }
+
+  return perc;
+
+}
+
+/////////////////////////////////////////////////
 /////////////// FUNCTIONS IN LOOP ///////////////
 
 void doInLoop() {
@@ -362,7 +386,7 @@ void doInLoop() {
         doMeasurement();
       
         if (WiFi.status() == WL_CONNECTED) {
-          Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=manual_measure_on_controller&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distance + "}"));
+          Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=manual_measure_on_controller&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distToPercent() + "}"));
         }
       }
 
@@ -400,11 +424,21 @@ void doInLoop() {
 
   if (dThreshChanged) {
     Serial.println("Distance threshold changed");
+
+    if (distance >= SOFT_MIN) {
+      Serial.println("Pump ON!");
+      digitalWrite(PUMP_PIN, HIGH);
+    }
+
+    if (distance <= SOFT_MAX) {
+      Serial.println("Pump OFF");
+      digitalWrite(PUMP_PIN, LOW);
+    }
+
     if (WiFi.status() == WL_CONNECTED) {
-      Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=distance_threshold_changed&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distance + "}"));
+      Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=distance_threshold_changed&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distToPercent() + "}"));
     }
   }
-  
 
 }
 
@@ -457,7 +491,7 @@ void onParsed(String line) {
   if (strcmp(e_type, "do_measure") == 0) {
     Serial.print("Servidor solicita hacer medición. Distancia actual: ");
     doMeasurement();
-    Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + e_detail_device + "&shout=true&log=current_distance_requested&state_changed=true&record=true", "application/json", String("{\"type\":\"change\", \"data\":" + (String)distance + ", \"whisper\":") + String(e_detail_whisper) + "}"));
+    Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + e_detail_device + "&shout=true&log=current_distance_requested&state_changed=true&record=true", "application/json", String("{\"type\":\"change\", \"data\":" + (String)distToPercent() + ", \"whisper\":") + String(e_detail_whisper) + "}"));
   }
 
 
@@ -503,6 +537,9 @@ void setup() {
   // Set pinmodes for sensor connections
   pinMode(ECHOPIN, INPUT);
   pinMode(TRIGPIN, OUTPUT);
+
+  // Relay for pump
+  pinMode(PUMP_PIN, OUTPUT);
 
   setupWifiConfigServer(server, EEPROM_ADDR_CONNECTED_SSID, EEPROM_ADDR_CONNECTED_PASSWORD, AP_SSID, AP_PASSWORD);
 
