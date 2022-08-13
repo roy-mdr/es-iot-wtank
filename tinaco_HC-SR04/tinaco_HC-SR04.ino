@@ -66,24 +66,28 @@ WiFiClient sub_WiFiclient;
 // Define connections to sensor
 #define TRIGPIN 13
 #define ECHOPIN 12
- 
-// Floats to calculate distance
-float duration, distance;
+
 
 #define DISTANCE_THRESHOLD 100 // distance in mm. When measured a distance higher than this threshold it will update the value in the server
 int distanceRange;
 
-float HARD_MIN; // distance in mm. to set 0%
-float HARD_MAX; // distance in mm. to set 100%
-float SOFT_MIN; // distance in mm. to set the pump ON
-float SOFT_MAX; // distance in mm. to set the pump OFF
-#define PUMP_PIN 14 // Pin to trigger pump relay
+float HARD_MIN = 2000; // distance in mm. to set 0%
+float HARD_MAX = 500;  // distance in mm. to set 100%
+float SOFT_MIN = 1750; // distance in mm. to set the pump ON
+float SOFT_MAX = 750;  // distance in mm. to set the pump OFF
+#define PUMP_PIN 14    // Pin to trigger pump relay
 
 /***** MEASURE TIMEOUT *****/
 unsigned long me_timestamp = millis();
-/*unsigned int  me_times = 0;*/
-unsigned int  me_timeout = 1000; // 1 second. Delay between each measurement in loop
+unsigned int  me_times = 0;
+#define me_max_times 10 // The max times to loop before average distances
+unsigned int  me_timeout = 100; // 100 ms. Delay between each measurement in loop
 unsigned int  me_track = me_timeout; // me_track = me_timeout; TO: execute function and then start counting
+
+// Floats to calculate distance
+float distanceArr[me_max_times];
+float distanceSum = 0;
+float distanceAvg = 0;
 
 ESP8266WebServer serverConfig(5050);
 
@@ -202,6 +206,9 @@ unsigned int  al_track = 0; // al_track = al_timeout; TO: execute function and t
 
 void handleAliveLoop() {
 
+  // Serial.print("Trying to keep alive...");
+  // Serial.println(runAliveLoop);
+
   if (!runAliveLoop) {
     return;
   }
@@ -219,7 +226,9 @@ void handleAliveLoop() {
     al_track = 0;
 
     // RUN THIS FUNCTION!
+    Serial.print("Keeping alive!: ");
     String response = httpPost(String("http://") + SUB_HOST + ":" + SUB_PORT + "/alive", "application/json", String("{\"connid\":") + connId + ",\"secret\":\"" + connSecret + "\"}");
+    Serial.println(response);
 
     ///// Deserialize JSON. from: https://arduinojson.org/v6/assistant
 
@@ -289,7 +298,7 @@ void updateControllerData() {
 /////////////////////////////////////////////////
 //////////// DO DISTANCE MEASUREMENT ////////////
 
-void doMeasurement(bool log = true) {
+float doMeasurement(bool log = true) {
   // Set the trigger pin LOW for 2uS
   digitalWrite(TRIGPIN, LOW);
   delayMicroseconds(2);
@@ -302,13 +311,13 @@ void doMeasurement(bool log = true) {
   digitalWrite(TRIGPIN, LOW);
  
   // Measure the width of the incoming pulse
-  duration = pulseIn(ECHOPIN, HIGH);
+  float duration = pulseIn(ECHOPIN, HIGH);
  
   // Determine distance from duration
   // Use 343 metres per second as speed of sound
   // Divide by 1000 as we want millimeters
  
-  distance = (duration / 2) * 0.343;
+  float distance = (duration / 2) * 0.343;
  
   if (log) {
     // Print result to serial monitor
@@ -317,33 +326,7 @@ void doMeasurement(bool log = true) {
     Serial.println(" mm");
   }
 
-}
-
-/////////////////////////////////////////////////
-/////// DO DISTANCE MEASUREMENT AVERAGED ///////
-
-float doAvgMeasurement(int lectures, int msDelay) {
-
-  float avgDist = 0;
-
-  for (int i = 0; i < lectures; i++) {
-    doMeasurement();
-    avgDist = avgDist + distance;
-    delay(msDelay);
-  }
-
-  avgDist = avgDist / lectures;
-
-  // Print result to serial monitor
-  Serial.print("average of ");
-  Serial.print(lectures);
-  Serial.print("lectures in ");
-  Serial.print(msDelay * lectures);
-  Serial.print("ms: ");
-  Serial.print(avgDist);
-  Serial.println("mm");
-
-  return avgDist;
+  return distance;
 
 }
 
@@ -352,7 +335,7 @@ float doAvgMeasurement(int lectures, int msDelay) {
 
 float distToPercent(bool log = true) {
 
-  float perc = map(distance, HARD_MIN, HARD_MAX, 0, 100);
+  float perc = map(distanceAvg, HARD_MIN, HARD_MAX, 0, 100);
 
   if (log) {
     // Print result to serial monitor
@@ -363,6 +346,27 @@ float distToPercent(bool log = true) {
 
   return perc;
 
+}
+
+/////////////////////////////////////////////////
+/////////////// ARRAY MIN AND MAX ///////////////
+
+float getMin(float a[], int size) {
+  float min = a[0];
+  for (int i = 0; i < size; i++) {
+    if (a[i] < min)
+      min = a[i];
+  }
+  return min;
+}
+
+float getMax(float a[], int size) {
+  float max = a[0];
+  for (int i = 0; i < size; i++) {
+    if (a[i] > max)
+      max = a[i];
+  }
+  return max;
 }
 
 /////////////////////////////////////////////////
@@ -414,8 +418,6 @@ void doInLoop() {
       if (pushedTime < 2000) { // IF PIN_CTRL WAS PRESSED LESS THAN 2 SECONDS...
         
         // UPDATE LECTURE IN SERVER
-        doMeasurement();
-      
         if (WiFi.status() == WL_CONNECTED) {
           Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + "tinaco_0001" + "&shout=true&log=manual_measure_on_controller&state_changed=true&record=true", "application/json", "{\"type\":\"measure\", \"data\":" + (String)distToPercent() + "}"));
         }
@@ -437,14 +439,38 @@ void doInLoop() {
 
   if ( me_track > me_timeout ) {
     // DO TIMEOUT!
-    /*me_times++;*/
+    me_times++;
     me_track = 0;
-    doMeasurement(false); // RUN THIS FUNCTION!
+    distanceArr[me_times] = doMeasurement(false); // RUN THIS FUNCTION!
+
+    if (me_times >= me_max_times) {
+
+      // ELIMINAR MIN, MAX Y PROMEDIAR
+      float minDist = getMin(distanceArr, me_max_times);
+      float maxDist = getMax(distanceArr, me_max_times);
+      distanceSum = 0;
+
+      for(unsigned int index = 0; index < me_max_times; index++) {
+        if ( (distanceArr[index] != minDist) && (distanceArr[index] != maxDist) ) {
+          distanceSum += distanceArr[index];
+        }
+      }
+
+      Serial.print("Hora de promediar! ");
+      Serial.print(distanceSum);
+      Serial.print("/");
+      Serial.print(me_times-2);
+      Serial.print(" = ");
+      distanceAvg = distanceSum / (me_times-2);
+      Serial.println(distanceAvg);
+
+      me_times = 0;
+    }
   }
 
 
   bool dThreshChanged;
-  int dThreshCurrRange = (int)(distance / DISTANCE_THRESHOLD);
+  int dThreshCurrRange = (int)(distanceAvg / DISTANCE_THRESHOLD);
 
   if( dThreshCurrRange != distanceRange ){
     distanceRange = dThreshCurrRange;
@@ -456,12 +482,12 @@ void doInLoop() {
   if (dThreshChanged) {
     Serial.println("Distance threshold changed");
 
-    if (distance >= SOFT_MIN) {
+    if (distanceAvg >= SOFT_MIN) {
       Serial.println("Pump ON!");
       digitalWrite(PUMP_PIN, HIGH);
     }
 
-    if (distance <= SOFT_MAX) {
+    if (distanceAvg <= SOFT_MAX) {
       Serial.println("Pump OFF");
       digitalWrite(PUMP_PIN, LOW);
     }
@@ -521,7 +547,6 @@ void onParsed(String line) {
 
   if (strcmp(e_type, "do_measure") == 0) {
     Serial.print("Servidor solicita hacer medición. Distancia actual: ");
-    doMeasurement();
     Serial.print(httpPost(String("http://") + PUB_HOST + "/controll/res.php?device=" + e_detail_device + "&shout=true&log=current_distance_requested&state_changed=true&record=true", "application/json", String("{\"type\":\"change\", \"data\":" + (String)distToPercent() + ", \"whisper\":") + String(e_detail_whisper) + "}"));
   }
 
@@ -591,25 +616,25 @@ void setup() {
   });
 
   serverConfig.on("/set-hard_max", HTTP_GET, []() {
-    HARD_MAX = doAvgMeasurement(10, 100);
+    HARD_MAX = distanceAvg;
     serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
     serverConfig.send ( 302, "text/plain", "");
   });
 
   serverConfig.on("/set-soft_max", HTTP_GET, []() {
-    SOFT_MAX = doAvgMeasurement(10, 100);
+    SOFT_MAX = distanceAvg;
     serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
     serverConfig.send ( 302, "text/plain", "");
   });
 
   serverConfig.on("/set-soft_min", HTTP_GET, []() {
-    SOFT_MIN = doAvgMeasurement(10, 100);
+    SOFT_MIN = distanceAvg;
     serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
     serverConfig.send ( 302, "text/plain", "");
   });
 
   serverConfig.on("/set-hard_min", HTTP_GET, []() {
-    HARD_MIN = doAvgMeasurement(10, 100);
+    HARD_MIN = distanceAvg;
     serverConfig.sendHeader("Location", String("/"), true); // Redirecto to home /
     serverConfig.send ( 302, "text/plain", "");
   });
@@ -698,9 +723,3 @@ void loop() {
   handleNoPollSubscription(sub_WiFiclient, SUB_HOST, SUB_PORT, SUB_PATH, "POST", String("{\"clid\":\"") + clid + "\",\"ep\":[\"controll/tinaco/" + clid + "/req\"]}", "tinaco/2022", doInLoop, onConnected, onParsed);
   
 }
-
-
-
-
-
-
